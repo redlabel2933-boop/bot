@@ -82,6 +82,34 @@ async def safe_delete(context, chat_id, message_id):
 
 
 # =====================
+# HELPER: SAFE REPLY (anti-crash Markdown)
+# Jika Markdown gagal (karakter khusus di URL), fallback ke plain text
+# =====================
+async def safe_reply(message, text, **kwargs):
+    try:
+        return await message.reply_text(text, parse_mode="Markdown", **kwargs)
+    except Exception:
+        # Markdown gagal -> kirim tanpa formatting
+        try:
+            clean = text.replace('`', '').replace('*', '').replace('_', '')
+            return await message.reply_text(clean, **kwargs)
+        except Exception as e2:
+            return await message.reply_text(f"Error menampilkan hasil: {str(e2)[:100]}")
+
+
+# =====================
+# HELPER: ESCAPE MARKDOWN
+# =====================
+def escape_md(text):
+    if not text:
+        return "-"
+    text = str(text)
+    for ch in ('\\', '`', '*', '_', '[', ']', '(', ')'):
+        text = text.replace(ch, '\\' + ch)
+    return text
+
+
+# =====================
 # HELPER: MENTION USER
 # =====================
 def make_mention(user_id, username=None, first_name="Pemilik"):
@@ -92,7 +120,6 @@ def make_mention(user_id, username=None, first_name="Pemilik"):
 
 # =====================
 # HELPER: BUAT SSL CONTEXT
-# Lebih toleran terhadap berbagai konfigurasi SSL
 # =====================
 def make_ssl_context():
     ctx = ssl.create_default_context()
@@ -104,36 +131,81 @@ def make_ssl_context():
 # =====================
 # HELPER: BUAT SESSION
 # =====================
-def make_session(ua_index=0):
+def make_session(ua_index=0, cookie_jar=None):
     """
     Buat aiohttp ClientSession dengan:
     - SSL toleran
     - Header lengkap mirip browser asli
-    - Timeout 20 detik
+    - Timeout 30 detik
+    - Cookie jar opsional untuk share cookies antar request
     """
     headers = {
         "User-Agent"      : USER_AGENTS[ua_index % len(USER_AGENTS)],
         "Accept"          : "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" : "en-US,en;q=0.9,id;q=0.8",
-        "Accept-Encoding" : "gzip, deflate, br",
+        "Accept-Encoding" : "gzip, deflate",
         "Connection"      : "keep-alive",
         "Upgrade-Insecure-Requests": "1",
         "Cache-Control"   : "max-age=0",
+        "DNT"             : "1",
+        "Sec-Fetch-Dest"  : "document",
+        "Sec-Fetch-Mode"  : "navigate",
+        "Sec-Fetch-Site"  : "none",
+        "Sec-Fetch-User"  : "?1",
     }
     connector = aiohttp.TCPConnector(ssl=make_ssl_context())
-    timeout   = aiohttp.ClientTimeout(total=20, connect=10)
-    return aiohttp.ClientSession(headers=headers, connector=connector, timeout=timeout)
+    timeout   = aiohttp.ClientTimeout(total=30, connect=15)
+    return aiohttp.ClientSession(
+        headers=headers,
+        connector=connector,
+        timeout=timeout,
+        cookie_jar=cookie_jar or aiohttp.CookieJar(unsafe=True),
+    )
+
+
+# =====================
+# HELPER: BUAT GOOGLEBOT SESSION (untuk detect cloaking)
+# =====================
+def make_googlebot_session(cookie_jar=None):
+    """Session yang meniru Googlebot asli (UA + From header)."""
+    headers = {
+        "User-Agent"      : "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "From"            : "googlebot(at)googlebot.com",
+        "Accept"          : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language" : "en-US,en;q=0.5",
+        "Accept-Encoding" : "gzip, deflate",
+        "Connection"      : "keep-alive",
+    }
+    connector = aiohttp.TCPConnector(ssl=make_ssl_context())
+    timeout   = aiohttp.ClientTimeout(total=30, connect=15)
+    return aiohttp.ClientSession(
+        headers=headers, connector=connector, timeout=timeout,
+        cookie_jar=cookie_jar or aiohttp.CookieJar(unsafe=True),
+    )
+
+
+def make_googlebot_mobile_session(cookie_jar=None):
+    """Session yang meniru Googlebot Mobile (smartphone)."""
+    headers = {
+        "User-Agent"      : "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.71 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "From"            : "googlebot(at)googlebot.com",
+        "Accept"          : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language" : "en-US,en;q=0.5",
+        "Accept-Encoding" : "gzip, deflate",
+        "Connection"      : "keep-alive",
+    }
+    connector = aiohttp.TCPConnector(ssl=make_ssl_context())
+    timeout   = aiohttp.ClientTimeout(total=30, connect=15)
+    return aiohttp.ClientSession(
+        headers=headers, connector=connector, timeout=timeout,
+        cookie_jar=cookie_jar or aiohttp.CookieJar(unsafe=True),
+    )
 
 
 # =====================
 # HELPER: BACA HTML DENGAN ENCODING AMAN
-# Mencegah crash akibat encoding tidak standar
 # =====================
 async def safe_read_html(resp) -> str:
-    """
-    Baca response sebagai teks dengan fallback encoding.
-    Urutan: utf-8 → iso-8859-1 → windows-1252 → latin-1
-    """
     raw = await resp.read()
     for enc in ("utf-8", "iso-8859-1", "windows-1252", "latin-1"):
         try:
@@ -175,142 +247,282 @@ def extract_page_status(html: str):
 
 # =====================
 # DOMAIN STATUS CHECKER
+# - 403 retry dengan UA berbeda
+# - 403 dianggap "ok" (domain online, hanya block bot)
+# - SSL error fallback ke http://
 # =====================
 async def check_domain_status(url):
     result = {
         "status_code"     : None,
         "page_status_code": None,
         "page_status_text": None,
+        "page_title"      : None,
         "ok"              : False,
         "error"           : None,
         "redirect_url"    : None,
     }
-    try:
-        async with make_session() as session:
-            async with session.get(url, allow_redirects=True, max_redirects=10) as resp:
-                result["status_code"] = resp.status
-                result["ok"]          = resp.status < 400
 
-                if str(resp.url) != url:
-                    result["redirect_url"] = str(resp.url)
+    # Selalu pakai browser UA (index 1=Chrome, 3=Safari, 4=Firefox)
+    # BUKAN Googlebot (index 0), agar status akurat seperti user asli
+    browser_ua_indices = [1, 3, 4]
 
+    for ua_idx in browser_ua_indices:
+        try:
+            async with make_session(ua_index=ua_idx) as session:
+                async with session.get(url, allow_redirects=True, max_redirects=10) as resp:
+                    result["status_code"] = resp.status
+                    result["ok"] = resp.status < 400 or resp.status == 403
+
+                    if str(resp.url) != url:
+                        result["redirect_url"] = str(resp.url)
+
+                    try:
+                        html = await safe_read_html(resp)
+                        # Ambil title halaman sebagai status indicator
+                        soup = BeautifulSoup(html, "html.parser")
+                        title_tag = soup.find("title")
+                        if title_tag and title_tag.text:
+                            result["page_title"] = title_tag.text.strip()[:80]
+
+                        ps = extract_page_status(html)
+                        result["page_status_code"] = ps["code"]
+                        result["page_status_text"] = ps["text"]
+                    except:
+                        pass
+
+                    if resp.status == 403 and ua_idx != browser_ua_indices[-1]:
+                        continue
+
+                    return result
+
+        except aiohttp.ClientSSLError as e:
+            if url.startswith("https://"):
+                http_url = url.replace("https://", "http://", 1)
                 try:
-                    html = await safe_read_html(resp)
-                    ps   = extract_page_status(html)
-                    result["page_status_code"] = ps["code"]
-                    result["page_status_text"] = ps["text"]
+                    async with make_session(ua_index=1) as session:
+                        async with session.get(http_url, allow_redirects=True, max_redirects=10) as resp2:
+                            result["status_code"] = resp2.status
+                            result["ok"] = resp2.status < 400 or resp2.status == 403
+                            if str(resp2.url) != http_url:
+                                result["redirect_url"] = str(resp2.url)
+                            try:
+                                html2 = await safe_read_html(resp2)
+                                soup2 = BeautifulSoup(html2, "html.parser")
+                                t2 = soup2.find("title")
+                                if t2 and t2.text:
+                                    result["page_title"] = t2.text.strip()[:80]
+                            except:
+                                pass
+                            return result
                 except:
                     pass
-
-    except aiohttp.ClientConnectorError as e:
-        result["error"] = f"Koneksi gagal: {str(e)[:60]}"
-    except aiohttp.ClientSSLError as e:
-        result["error"] = f"SSL Error: {str(e)[:60]}"
-    except asyncio.TimeoutError:
-        result["error"] = "Timeout (server tidak merespons)"
-    except Exception as e:
-        result["error"] = f"Error: {str(e)[:80]}"
+            result["error"] = f"SSL Error: {str(e)[:60]}"
+        except aiohttp.ClientConnectorError as e:
+            result["error"] = f"Koneksi gagal: {str(e)[:60]}"
+        except asyncio.TimeoutError:
+            result["error"] = "Timeout (server tidak merespons)"
+        except Exception as e:
+            result["error"] = f"Error: {str(e)[:80]}"
 
     return result
 
 
 # =====================
-# AMP CHECKER — DIPERBAIKI
-# - safe_read_html untuk encoding
-# - SSL context lebih toleran
-# - Return detail error, bukan langsung CONN_ERROR
+# HELPER: EXTRACT AMP FROM HTML
 # =====================
-async def get_amp_url(domain, retries=3, delay=3):
+def find_amp_in_html(html):
+    """Cari <link rel='amphtml'> di HTML, return href atau None."""
+    if not html:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    amp = soup.find("link", rel="amphtml")
+    if amp and amp.get("href"):
+        return amp["href"].strip()
+    return None
+
+
+def find_article_links(html, base_url):
+    """
+    Cari link artikel dari halaman (untuk cek AMP di halaman artikel).
+    Banyak website cuma punya AMP di halaman artikel, bukan homepage.
+    """
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    parsed_base = urlparse(base_url)
+    base_domain = parsed_base.netloc.lower().replace("www.", "")
+    links = []
+
+    for a_tag in soup.find_all("a", href=True):
+        href = a_tag["href"].strip()
+        if href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        if href.startswith("/"):
+            href = f"{parsed_base.scheme}://{parsed_base.netloc}{href}"
+        elif not href.startswith("http"):
+            continue
+        link_parsed = urlparse(href)
+        link_domain = link_parsed.netloc.lower().replace("www.", "")
+        if link_domain != base_domain:
+            continue
+        path = link_parsed.path.rstrip("/")
+        if path and path.count("/") >= 1 and len(path) > 5:
+            skip_paths = ("/wp-admin", "/wp-login", "/wp-content", "/feed",
+                          "/tag/", "/category/", "/author/", "/page/",
+                          "/login", "/register", "/cart", "/checkout",
+                          "/search", "/sitemap", ".xml", ".json", ".css", ".js")
+            if not any(path.lower().startswith(s) or path.lower().endswith(s) for s in skip_paths):
+                if href not in links:
+                    links.append(href)
+        if len(links) >= 5:
+            break
+    return links
+
+
+# =====================
+# AMP CHECKER V3 (CLOAKING-AWARE)
+# Phase 1: Googlebot Desktop + Mobile (untuk cloaked sites)
+# Phase 2: Browser biasa (untuk non-cloaked / bot-blocking sites)
+# Phase 3: Cek halaman artikel dengan kedua mode
+# =====================
+async def get_amp_url(domain, retries=3, delay=2):
     """
     Return:
-      str   → AMP URL ditemukan
-      None  → Domain OK tapi tidak ada AMP
-      "HTTP_ERROR"  → Server balas 4xx
-      "CONN_ERROR"  → Tidak bisa konek sama sekali (semua retry gagal)
+      str   -> AMP URL ditemukan
+      None  -> Domain OK tapi tidak ada AMP
+      "HTTP_ERROR"  -> Server balas 4xx
+      "CONN_ERROR"  -> Tidak bisa konek sama sekali
     """
     last_exception = None
     last_status    = None
+    page_html      = None
+    final_url      = None
 
-    for attempt in range(retries):
+    # == PHASE 1: CEK SEBAGAI GOOGLEBOT (untuk cloaking) ==
+    googlebot_makers = [
+        ("Googlebot-Desktop", make_googlebot_session),
+        ("Googlebot-Mobile", make_googlebot_mobile_session),
+    ]
+
+    for bot_name, session_factory in googlebot_makers:
         try:
-            async with make_session(ua_index=attempt) as session:
-                async with session.get(
-                    domain,
-                    allow_redirects=True,
-                    max_redirects=10
-                ) as resp:
+            async with session_factory() as session:
+                async with session.get(domain, allow_redirects=True, max_redirects=10) as resp:
                     last_status = resp.status
-
-                    # Server error 5xx → retry
-                    if resp.status >= 500:
-                        write_log(f"[RETRY {attempt+1}] {domain} -> HTTP {resp.status}")
-                        await asyncio.sleep(delay)
-                        continue
-
-                    # Client error 4xx → stop
-                    if resp.status >= 400:
-                        write_log(f"[4xx ERROR] {domain} -> HTTP {resp.status}")
-                        return "HTTP_ERROR"
-
-                    # ✅ Baca HTML dengan encoding aman
-                    html = await safe_read_html(resp)
-                    soup = BeautifulSoup(html, "html.parser")
-                    amp  = soup.find("link", rel="amphtml")
-
-                    if amp and amp.get("href"):
-                        return amp["href"].strip()
-
-                    # Tidak ada AMP di attempt ini → coba lagi
-                    write_log(f"[NO AMP attempt {attempt+1}] {domain}")
-                    await asyncio.sleep(delay)
-
+                    final_url = str(resp.url)
+                    if resp.status < 400:
+                        html = await safe_read_html(resp)
+                        page_html = html
+                        amp_href = find_amp_in_html(html)
+                        if amp_href:
+                            write_log(f"[AMP via {bot_name}] {domain} -> {amp_href}")
+                            return amp_href
+                        write_log(f"[NO AMP via {bot_name}] {domain}")
+                    else:
+                        write_log(f"[{bot_name} HTTP {resp.status}] {domain}")
         except asyncio.TimeoutError:
             last_exception = "Timeout"
-            write_log(f"[TIMEOUT attempt {attempt+1}] {domain}")
-            await asyncio.sleep(delay)
-
+            write_log(f"[TIMEOUT {bot_name}] {domain}")
         except aiohttp.ClientSSLError as e:
-            # SSL error → coba fallback HTTP sekali
             last_exception = f"SSL: {e}"
-            write_log(f"[SSL ERROR attempt {attempt+1}] {domain} -> {e}")
+            write_log(f"[SSL {bot_name}] {domain}")
+        except aiohttp.ClientConnectorError as e:
+            last_exception = f"ConnError: {e}"
+            write_log(f"[CONN {bot_name}] {domain}")
+        except Exception as e:
+            last_exception = str(e)
+            write_log(f"[ERR {bot_name}] {domain} -> {e}")
 
-            # Coba dengan http:// jika https:// SSL error
+    # == PHASE 2: CEK SEBAGAI BROWSER BIASA ==
+    cookie_jar = aiohttp.CookieJar(unsafe=True)
+    for attempt in range(retries):
+        try:
+            async with make_session(ua_index=attempt + 1, cookie_jar=cookie_jar) as session:
+                async with session.get(domain, allow_redirects=True, max_redirects=10) as resp:
+                    last_status = resp.status
+                    final_url = str(resp.url)
+                    if resp.status >= 500:
+                        await asyncio.sleep(delay)
+                        continue
+                    if resp.status == 403:
+                        await asyncio.sleep(delay)
+                        continue
+                    if resp.status >= 400:
+                        return "HTTP_ERROR"
+                    html = await safe_read_html(resp)
+                    page_html = html
+                    amp_href = find_amp_in_html(html)
+                    if amp_href:
+                        write_log(f"[AMP via browser] {domain} -> {amp_href}")
+                        return amp_href
+                    write_log(f"[NO AMP browser {attempt+1}] {domain}")
+                    break  # 200 tapi tidak ada AMP, tidak perlu retry
+        except asyncio.TimeoutError:
+            last_exception = "Timeout"
+            await asyncio.sleep(delay)
+        except aiohttp.ClientSSLError as e:
+            last_exception = f"SSL: {e}"
             if domain.startswith("https://") and attempt == 0:
-                http_fallback = domain.replace("https://", "http://", 1)
-                write_log(f"[SSL FALLBACK] Trying http:// for {domain}")
                 try:
-                    async with make_session(ua_index=attempt+1) as session:
-                        async with session.get(
-                            http_fallback,
-                            allow_redirects=True,
-                            max_redirects=10
-                        ) as resp2:
-                            if resp2.status < 400:
-                                html2 = await safe_read_html(resp2)
-                                soup2 = BeautifulSoup(html2, "html.parser")
-                                amp2  = soup2.find("link", rel="amphtml")
-                                if amp2 and amp2.get("href"):
-                                    return amp2["href"].strip()
-                                last_status = resp2.status
+                    http_fb = domain.replace("https://", "http://", 1)
+                    async with make_session(ua_index=1) as s:
+                        async with s.get(http_fb, allow_redirects=True, max_redirects=10) as r2:
+                            if r2.status < 400:
+                                h2 = await safe_read_html(r2)
+                                page_html = h2
+                                final_url = str(r2.url)
+                                a2 = find_amp_in_html(h2)
+                                if a2:
+                                    return a2
+                                last_status = r2.status
                 except:
                     pass
             await asyncio.sleep(delay)
-
         except aiohttp.ClientConnectorError as e:
             last_exception = f"ConnError: {e}"
-            write_log(f"[CONN ERROR attempt {attempt+1}] {domain} -> {e}")
             await asyncio.sleep(delay)
-
         except Exception as e:
             last_exception = str(e)
-            write_log(f"[EXCEPTION attempt {attempt+1}] {domain} -> {e}")
             await asyncio.sleep(delay)
 
-    # Semua retry habis
+    # == PHASE 3: CEK HALAMAN ARTIKEL ==
+    if page_html and last_status is not None and last_status < 400:
+        check_url = final_url or domain
+        article_links = find_article_links(page_html, check_url)
+        if article_links:
+            write_log(f"[ARTICLE CHECK] {domain} -> {len(article_links)} links")
+            for link in article_links[:3]:
+                # Coba Googlebot dulu (cloaking)
+                try:
+                    async with make_googlebot_session() as session:
+                        async with session.get(link, allow_redirects=True, max_redirects=5) as ar:
+                            if ar.status == 200:
+                                ah = await safe_read_html(ar)
+                                amp_href = find_amp_in_html(ah)
+                                if amp_href:
+                                    write_log(f"[AMP IN ARTICLE via Googlebot] {domain} -> {amp_href}")
+                                    return amp_href
+                except:
+                    pass
+                # Fallback: browser biasa
+                try:
+                    async with make_session(ua_index=1) as session:
+                        async with session.get(link, allow_redirects=True, max_redirects=5) as ar:
+                            if ar.status == 200:
+                                ah = await safe_read_html(ar)
+                                amp_href = find_amp_in_html(ah)
+                                if amp_href:
+                                    write_log(f"[AMP IN ARTICLE via browser] {domain} -> {amp_href}")
+                                    return amp_href
+                except:
+                    continue
+
+    # Semua phase selesai
     if last_status is not None:
-        # Bisa konek, tapi AMP memang tidak ada
+        if last_status == 403:
+            write_log(f"[403 FINAL] {domain}")
+            return "HTTP_ERROR"
         return None
-    # Tidak bisa konek sama sekali
     write_log(f"[CONN_ERROR FINAL] {domain} -> {last_exception}")
     return "CONN_ERROR"
 
@@ -319,24 +531,15 @@ async def get_amp_url(domain, retries=3, delay=3):
 # FORMAT STATUS DISPLAY
 # =====================
 def format_status_display(status: dict) -> str:
-    http_code  = status.get("status_code")
-    page_code  = status.get("page_status_code")
-    page_text  = status.get("page_status_text")
-    error      = status.get("error")
-
+    error = status.get("error")
     if error:
         return error
-    if page_code and page_code != http_code:
-        return f"{page_code} _(dari halaman: \"{page_text}\")_"
-    if page_code and page_text:
-        return f"{page_code} — {page_text}"
+    http_code = status.get("status_code")
     return str(http_code) if http_code else "-"
 
 
 # =====================
 # COMMAND TAMBAH
-# PERBAIKAN: Jika domain OK tapi CONN_ERROR saat cek AMP
-#            → tetap disimpan dengan amp = None, jangan ditolak
 # =====================
 async def tambah(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -348,45 +551,52 @@ async def tambah(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user    = update.effective_user
 
     loading_msg = await update.message.reply_text(
-        f"⏳ Mengecek domain `{get_display_url(request_url)}`...",
-        parse_mode="Markdown"
+        f"\u23f3 Mengecek domain `{get_display_url(request_url)}`..."
     )
 
-    status = await check_domain_status(request_url)
+    try:
+        status = await check_domain_status(request_url)
+    except Exception as e:
+        await safe_delete(context, chat_id, loading_msg.message_id)
+        await update.message.reply_text(f"Error saat cek domain: {str(e)[:100]}")
+        return
+
     await safe_delete(context, chat_id, loading_msg.message_id)
 
     if not status["ok"]:
         err = status["error"] or format_status_display(status)
-        await update.message.reply_text(
-            "*Domain tidak bisa diakses!*\n"
-            "────────────────────\n"
-            f"Domain : `{get_display_url(request_url)}`\n"
-            f"Status : `{err}`\n"
-            "Pastikan domain aktif sebelum ditambahkan.",
-            parse_mode="Markdown"
+        await safe_reply(
+            update.message,
+            f"\u274c *Domain tidak bisa diakses!*\n"
+            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            f"\U0001f310 Domain : `{get_display_url(request_url)}`\n"
+            f"\u26a0\ufe0f Status : `{err}`\n"
+            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            f"Pastikan domain aktif sebelum ditambahkan.",
         )
         return
 
-    loading_msg2 = await update.message.reply_text(
-        "⏳ Mengambil AMP URL...", parse_mode="Markdown"
-    )
-    amp_url = await get_amp_url(request_url)
+    loading_msg2 = await update.message.reply_text("\u23f3 Mengambil AMP URL...")
+
+    try:
+        amp_url = await get_amp_url(request_url)
+    except Exception as e:
+        await safe_delete(context, chat_id, loading_msg2.message_id)
+        await update.message.reply_text(f"Error saat cek AMP: {str(e)[:100]}")
+        return
+
     await safe_delete(context, chat_id, loading_msg2.message_id)
 
-    # ✅ PERBAIKAN: HTTP_ERROR tetap ditolak,
-    #    tapi CONN_ERROR → simpan dengan amp = None (domain terbukti OK dari check_domain_status)
     if amp_url == "HTTP_ERROR":
         await update.message.reply_text(
-            "❌ Server menolak request (HTTP 4xx). Domain tidak bisa dipantau.",
-            parse_mode="Markdown"
+            "\u274c Server menolak request (HTTP 4xx). Domain tidak bisa dipantau."
         )
         return
 
-    # CONN_ERROR saat cek AMP tapi domain_status OK → simpan, amp dianggap None dulu
     conn_warning = ""
     if amp_url == "CONN_ERROR":
         amp_url      = None
-        conn_warning = "\n⚠️ _AMP belum bisa diambil saat ini, akan dicoba kembali saat monitoring._"
+        conn_warning = "\n\u26a0\ufe0f _AMP belum bisa diambil saat ini, akan dicoba kembali saat monitoring._"
 
     data = load_data()
     data[request_url] = {
@@ -409,17 +619,17 @@ async def tambah(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_display = format_status_display(status)
     mention        = make_mention(user.id, user.username, user.first_name)
 
-    await update.message.reply_text(
-        "✅ *DOMAIN DITAMBAHKAN*\n"
-        "────────────────────\n"
-        f"Domain   : `{get_display_url(request_url)}`\n"
-        f"Status   : `{status_display}`\n"
-        f"AMP Awal : `{amp_display}`\n"
-        f"Pemilik  : {mention}\n"
-        f"────────────────────"
+    await safe_reply(
+        update.message,
+        f"\u2705 *DOMAIN DITAMBAHKAN*\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        f"\U0001f310 Domain   : `{get_display_url(request_url)}`\n"
+        f"\U0001f4e1 Status   : `{status_display}`\n"
+        f"\u26a1 AMP Awal : `{amp_display}`\n"
+        f"\U0001f464 Pemilik  : {mention}\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
         f"{conn_warning}",
         disable_web_page_preview=True,
-        parse_mode="Markdown"
     )
 
 
@@ -437,13 +647,13 @@ async def hapus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if request_url in data:
         del data[request_url]
         save_data(data)
-        await update.message.reply_text(
-            f"🗑 *Domain Dihapus*\n────────────────────\n`{get_display_url(request_url)}`",
+        await safe_reply(
+            update.message,
+            f"\U0001f5d1 *Domain Dihapus*\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\U0001f310 `{get_display_url(request_url)}`",
             disable_web_page_preview=True,
-            parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text("⚠️ Domain tidak ditemukan.")
+        await update.message.reply_text("\u26a0\ufe0f Domain tidak ditemukan.")
 
 
 # =====================
@@ -458,18 +668,16 @@ async def list_domains(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Belum ada domain tersimpan.")
         return
 
-    msg = ["*DAFTAR DOMAIN MONITORING*\n"]
+    msg = ["\U0001f4cb *DAFTAR DOMAIN MONITORING*\n"]
     for d in domains:
         info       = data[d]
         amp_now    = info.get("current_amp")
         amp_display = (
             get_display_url(amp_now)
             if amp_now and amp_now not in ("CONN_ERROR", "HTTP_ERROR")
-            else "Error / Tidak terdeteksi"
+            else "Tidak terdeteksi"
         )
-        page_status = info.get("last_page_status")
         http_status = info.get("last_http_status", "-")
-        status_line = f"{http_status} — {page_status}" if page_status else str(http_status)
 
         owner_uid = info.get("owner_user_id")
         owner_un  = info.get("owner_username")
@@ -477,19 +685,19 @@ async def list_domains(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mention   = make_mention(owner_uid, owner_un, owner_fn) if owner_uid else "-"
 
         msg.append(
-            "────────────────────\n"
-            f"`{get_display_url(d)}`\n"
-            f"AMP Awal     : `{get_display_url(info.get('initial_amp'))}`\n"
-            f"AMP Sekarang : `{amp_display}`\n"
-            f"Status       : `{status_line}`\n"
-            f"Pemilik      : {mention}\n"
-            f"Last Check   : {info.get('last_checked', '-')}"
+            "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            f"\U0001f310 `{get_display_url(d)}`\n"
+            f"\u26a1 AMP Awal     : `{get_display_url(info.get('initial_amp'))}`\n"
+            f"\u26a1 AMP Sekarang : `{amp_display}`\n"
+            f"\U0001f4e1 Status       : `{http_status}`\n"
+            f"\U0001f464 Pemilik      : {mention}\n"
+            f"\U0001f552 Last Check   : {info.get('last_checked', '-')}"
         )
 
-    await update.message.reply_text(
+    await safe_reply(
+        update.message,
         "\n".join(msg),
         disable_web_page_preview=True,
-        parse_mode="Markdown"
     )
 
 
@@ -505,41 +713,46 @@ async def cek(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     loading_msg = await update.message.reply_text(
-        f"⏳ Mengecek `{get_display_url(request_url)}`...",
-        parse_mode="Markdown"
+        f"\u23f3 Mengecek `{get_display_url(request_url)}`..."
     )
 
-    amp, status = await asyncio.gather(
-        get_amp_url(request_url),
-        check_domain_status(request_url)
-    )
+    try:
+        amp, status = await asyncio.gather(
+            get_amp_url(request_url),
+            check_domain_status(request_url)
+        )
+    except Exception as e:
+        await safe_delete(context, chat_id, loading_msg.message_id)
+        await update.message.reply_text(f"\u274c Error saat mengecek: {str(e)[:100]}")
+        return
 
     await safe_delete(context, chat_id, loading_msg.message_id)
 
     if amp == "CONN_ERROR":
-        amp_text = "⚠️ Tidak bisa konek (CONN_ERROR)"
+        amp_text = "\u26a0\ufe0f Tidak bisa konek"
     elif amp == "HTTP_ERROR":
-        amp_text = "❌ HTTP Error (4xx)"
+        amp_text = "\u274c HTTP Error (4xx)"
     elif amp is None:
-        amp_text = "Tidak ditemukan (tidak ada amphtml)"
+        amp_text = "\u2796 Tidak ditemukan"
     else:
-        amp_text = get_display_url(amp)
+        amp_text = f"`{get_display_url(amp)}`"
 
     status_display = format_status_display(status)
     redirect_line  = ""
     if status.get("redirect_url"):
-        redirect_line = f"Redirect ke : `{get_display_url(status['redirect_url'])}`\n"
+        redir_display = get_display_url(status['redirect_url'])
+        redirect_line = f"\U0001f500 Redirect   : `{redir_display}`\n"
 
-    await update.message.reply_text(
-        "*HASIL PENGECEKAN AMP*\n"
-        "────────────────────\n"
-        f"Domain      : `{get_display_url(request_url)}`\n"
-        f"Status      : `{status_display}`\n"
+    await safe_reply(
+        update.message,
+        f"\U0001f50d *HASIL PENGECEKAN AMP*\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        f"\U0001f310 Domain     : `{get_display_url(request_url)}`\n"
+        f"\U0001f4e1 Status     : `{status_display}`\n"
         f"{redirect_line}"
-        f"AMP URL     : `{amp_text}`\n"
-        "────────────────────",
+        f"\u26a1 AMP URL    : {amp_text}\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
         disable_web_page_preview=True,
-        parse_mode="Markdown"
     )
 
 
@@ -555,28 +768,37 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     loading_msg = await update.message.reply_text(
-        f"⏳ Mengecek status `{get_display_url(request_url)}`...",
-        parse_mode="Markdown"
+        f"\u23f3 Mengecek status `{get_display_url(request_url)}`..."
     )
 
-    status = await check_domain_status(request_url)
+    try:
+        status = await check_domain_status(request_url)
+    except Exception as e:
+        await safe_delete(context, chat_id, loading_msg.message_id)
+        await update.message.reply_text(f"\u274c Error: {str(e)[:100]}")
+        return
+
     await safe_delete(context, chat_id, loading_msg.message_id)
 
-    kondisi       = "✅ Online / Normal" if status["ok"] else (f"❌ {status['error']}" if status["error"] else "⚠️ Bermasalah")
-    redirect_line = f"Redirect ke  : `{get_display_url(status['redirect_url'])}`\n" if status.get("redirect_url") else ""
-    page_line     = f"Info Halaman : `{status['page_status_text']}`\n" if status.get("page_status_text") else ""
+    if status["ok"]:
+        kondisi = "\u2705 Online"
+    elif status["error"]:
+        kondisi = f"\u274c {status['error']}"
+    else:
+        kondisi = "\u26a0\ufe0f Bermasalah"
 
-    await update.message.reply_text(
-        "*STATUS DOMAIN*\n"
-        "────────────────────\n"
-        f"Domain      : `{get_display_url(request_url)}`\n"
-        f"HTTP Status : `{status['status_code'] or '-'}`\n"
-        f"{page_line}"
+    redirect_line = f"\U0001f500 Redirect   : `{get_display_url(status['redirect_url'])}`\n" if status.get("redirect_url") else ""
+
+    await safe_reply(
+        update.message,
+        f"\U0001f4e1 *STATUS DOMAIN*\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        f"\U0001f310 Domain     : `{get_display_url(request_url)}`\n"
+        f"\U0001f4c8 HTTP Code  : `{status['status_code'] or '-'}`\n"
         f"{redirect_line}"
-        f"Kondisi     : {kondisi}\n"
-        "────────────────────",
+        f"\U0001f7e2 Kondisi    : {kondisi}\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
         disable_web_page_preview=True,
-        parse_mode="Markdown"
     )
 
 
@@ -585,10 +807,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =====================
 async def update_amp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text(
-            "Gunakan: `/update example.com`",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("Gunakan: /update example.com")
         return
 
     request_url, _ = normalize_domain(context.args[0])
@@ -598,33 +817,34 @@ async def update_amp(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if request_url not in data:
         await update.message.reply_text(
-            f"⚠️ Domain `{get_display_url(request_url)}` tidak ditemukan.",
-            parse_mode="Markdown"
+            f"Domain {get_display_url(request_url)} tidak ditemukan."
         )
         return
 
     info = data[request_url]
     if info.get("owner_user_id") and info["owner_user_id"] != user.id:
-        await update.message.reply_text(
-            "❌ Kamu bukan pemilik domain ini.",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("Kamu bukan pemilik domain ini.")
         return
 
     loading_msg = await update.message.reply_text(
-        f"⏳ Mengambil AMP terbaru dari `{get_display_url(request_url)}`...",
-        parse_mode="Markdown"
+        f"Mengambil AMP terbaru dari {get_display_url(request_url)}..."
     )
 
-    new_amp = await get_amp_url(request_url)
+    try:
+        new_amp = await get_amp_url(request_url)
+    except Exception as e:
+        await safe_delete(context, chat_id, loading_msg.message_id)
+        await update.message.reply_text(f"Error: {str(e)[:100]}")
+        return
+
     await safe_delete(context, chat_id, loading_msg.message_id)
 
     if new_amp == "HTTP_ERROR":
-        await update.message.reply_text("❌ Server menolak request saat update AMP.", parse_mode="Markdown")
+        await update.message.reply_text("\u274c Server menolak request saat update AMP.")
         return
 
     if new_amp == "CONN_ERROR":
-        await update.message.reply_text("❌ Gagal konek ke domain. Coba lagi nanti.", parse_mode="Markdown")
+        await update.message.reply_text("\u274c Gagal konek ke domain. Coba lagi nanti.")
         return
 
     old_amp = info.get("initial_amp")
@@ -640,16 +860,16 @@ async def update_amp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     write_log(f"[MANUAL UPDATE] {request_url} {old_amp} -> {new_amp} by {user.id}")
 
     mention = make_mention(user.id, user.username, user.first_name)
-    await update.message.reply_text(
-        "✅ *AMP REFERENSI DIPERBARUI*\n"
-        "────────────────────\n"
-        f"Domain   : `{get_display_url(request_url)}`\n"
-        f"AMP Lama : `{get_display_url(old_amp)}`\n"
-        f"AMP Baru : `{get_display_url(new_amp) if new_amp else 'Tidak ada AMP'}`\n"
-        f"Oleh     : {mention}\n"
-        "────────────────────",
+    await safe_reply(
+        update.message,
+        f"\u2705 *AMP REFERENSI DIPERBARUI*\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        f"\U0001f310 Domain   : `{get_display_url(request_url)}`\n"
+        f"\u26a1 AMP Lama : `{get_display_url(old_amp)}`\n"
+        f"\u26a1 AMP Baru : `{get_display_url(new_amp) if new_amp else 'Tidak ada AMP'}`\n"
+        f"\U0001f464 Oleh     : {mention}\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
         disable_web_page_preview=True,
-        parse_mode="Markdown"
     )
 
 
@@ -675,7 +895,7 @@ async def periodic_check(app):
             mention    = make_mention(owner_uid, owner_un, owner_fn) if owner_uid else ""
             mention_line = f"Pemilik : {mention}\n" if mention else ""
 
-            # ── Cek status domain ──
+            # -- Cek status domain --
             domain_status = await check_domain_status(domain)
             data[domain]["last_http_status"] = domain_status["status_code"]
             if domain_status.get("page_status_text"):
@@ -688,12 +908,12 @@ async def periodic_check(app):
                         await app.bot.send_message(
                             chat_id=info["chat_id"],
                             text=(
-                                "🚨 *DOMAIN TIDAK BISA DIAKSES*\n"
-                                "────────────────────\n"
-                                f"Domain  : `{get_display_url(domain)}`\n"
-                                f"Status  : `{err_msg}`\n"
+                                "*DOMAIN TIDAK BISA DIAKSES*\n"
+                                "--------------------\n"
+                                f"Domain  : {get_display_url(domain)}\n"
+                                f"Status  : {err_msg}\n"
                                 f"{mention_line}"
-                                "────────────────────"
+                                "--------------------"
                             ),
                             disable_web_page_preview=True,
                             parse_mode="Markdown"
@@ -710,7 +930,7 @@ async def periodic_check(app):
                 data[domain]["domain_down_notified"] = False
                 updated = True
 
-            # ── Cek AMP ──
+            # -- Cek AMP --
             new_amp = await get_amp_url(domain)
 
             if new_amp in ("CONN_ERROR", "HTTP_ERROR"):
@@ -731,14 +951,14 @@ async def periodic_check(app):
                         await app.bot.send_message(
                             chat_id=info["chat_id"],
                             text=(
-                                "🚨 *AMP TIDAK TERDETEKSI*\n"
-                                "────────────────────\n"
-                                f"Domain   : `{get_display_url(domain)}`\n"
-                                f"AMP Awal : `{get_display_url(initial_amp)}`\n"
+                                "*AMP TIDAK TERDETEKSI*\n"
+                                "--------------------\n"
+                                f"Domain   : {get_display_url(domain)}\n"
+                                f"AMP Awal : {get_display_url(initial_amp)}\n"
                                 f"Status   : Hilang 3x berturut-turut\n"
                                 f"Notif    : {notified_count+1}/3\n"
                                 f"{mention_line}"
-                                "────────────────────"
+                                "--------------------"
                             ),
                             disable_web_page_preview=True,
                             parse_mode="Markdown"
@@ -757,15 +977,15 @@ async def periodic_check(app):
                             await app.bot.send_message(
                                 chat_id=info["chat_id"],
                                 text=(
-                                    "⚠️ *AMP URL BERUBAH*\n"
-                                    "────────────────────\n"
-                                    f"Domain   : `{get_display_url(domain)}`\n"
-                                    f"AMP Lama : `{get_display_url(initial_amp)}`\n"
-                                    f"AMP Baru : `{get_display_url(new_amp)}`\n"
+                                    "*AMP URL BERUBAH*\n"
+                                    "--------------------\n"
+                                    f"Domain   : {get_display_url(domain)}\n"
+                                    f"AMP Lama : {get_display_url(initial_amp)}\n"
+                                    f"AMP Baru : {get_display_url(new_amp)}\n"
                                     f"Notif    : {notified_count+1}/3\n"
                                     f"{mention_line}"
-                                    f"Jika disengaja gunakan: `/update {get_display_url(domain)}`\n"
-                                    "────────────────────"
+                                    f"Jika disengaja gunakan: /update {get_display_url(domain)}\n"
+                                    "--------------------"
                                 ),
                                 disable_web_page_preview=True,
                                 parse_mode="Markdown"
@@ -782,12 +1002,12 @@ async def periodic_check(app):
                         await app.bot.send_message(
                             chat_id=info["chat_id"],
                             text=(
-                                "✅ *AMP KEMBALI NORMAL*\n"
-                                "────────────────────\n"
-                                f"Domain    : `{get_display_url(domain)}`\n"
-                                f"AMP Aktif : `{get_display_url(initial_amp)}`\n"
+                                "*AMP KEMBALI NORMAL*\n"
+                                "--------------------\n"
+                                f"Domain    : {get_display_url(domain)}\n"
+                                f"AMP Aktif : {get_display_url(initial_amp)}\n"
                                 f"{mention_line}"
-                                "────────────────────"
+                                "--------------------"
                             ),
                             disable_web_page_preview=True,
                             parse_mode="Markdown"
