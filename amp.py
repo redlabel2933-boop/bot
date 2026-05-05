@@ -1103,6 +1103,31 @@ async def periodic_check(app):
 
 
 # =====================
+# HEALTH SERVER (untuk Render)
+# =====================
+from aiohttp import web
+
+async def health_handler(request):
+    return web.json_response({
+        "status": "alive",
+        "bot": "AMP Monitor",
+        "time": str(datetime.now())
+    })
+
+async def start_health_server():
+    """Jalankan HTTP health server untuk Render."""
+    port = int(os.environ.get("PORT", 10000))
+    app = web.Application()
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/health", health_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"[HEALTH] Server running on port {port}", flush=True)
+
+
+# =====================
 # MAIN
 # =====================
 def main():
@@ -1117,7 +1142,10 @@ def main():
     app.add_handler(CommandHandler("update", update_amp))
 
     async def startup(app):
+        # Start health server + periodic check bersamaan
+        await start_health_server()
         app.create_task(periodic_check(app))
+        print("[BOT] AMP Monitor started!", flush=True)
 
     app.post_init = startup
     app.run_polling()
