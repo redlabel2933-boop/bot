@@ -2,6 +2,7 @@ import asyncio
 import aiohttp
 import ssl
 import json
+import os
 from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urlparse
@@ -13,8 +14,11 @@ import re
 if sys.platform == "win32":
     import ctypes
 
-DATA_FILE = "/data/domain_data.json"
-LOG_FILE  = "/data/amp_changes.log"
+# Path data (relative agar portable di Render / lokal)
+DATA_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+DATA_FILE = os.path.join(DATA_DIR, "domain_data.json")
+LOG_FILE  = os.path.join(DATA_DIR, "amp_changes.log")
 CHECK_INTERVAL = 600
 
 USER_AGENTS = [
@@ -1102,7 +1106,7 @@ async def periodic_check(app):
 # MAIN
 # =====================
 def main():
-    TOKEN = "7997011935:AAECyfPel4PrYHhXnMI6QCVi4oQ4Esp1n7E"
+    TOKEN = os.environ.get("BOT_TOKEN", "7997011935:AAECyfPel4PrYHhXnMI6QCVi4oQ4Esp1n7E")
     app   = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("tambah", tambah))
