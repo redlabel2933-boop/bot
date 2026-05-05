@@ -567,12 +567,12 @@ async def tambah(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = status["error"] or format_status_display(status)
         await safe_reply(
             update.message,
-            f"\u274c *Domain tidak bisa diakses!*\n"
-            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
-            f"\U0001f310 Domain : `{get_display_url(request_url)}`\n"
-            f"\u26a0\ufe0f Status : `{err}`\n"
-            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
-            f"Pastikan domain aktif sebelum ditambahkan.",
+            f"\u274c *DOMAIN TIDAK BISA DIAKSES*\n"
+            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            f"\U0001f310 Domain  : `{get_display_url(request_url)}`\n"
+            f"\u26a0\ufe0f Status  : `{err}`\n"
+            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            f"\U0001f4ac _Pastikan domain aktif sebelum ditambahkan._",
         )
         return
 
@@ -621,13 +621,14 @@ async def tambah(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await safe_reply(
         update.message,
-        f"\u2705 *DOMAIN DITAMBAHKAN*\n"
-        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        f"\u2705 *DOMAIN BERHASIL DITAMBAHKAN*\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
         f"\U0001f310 Domain   : `{get_display_url(request_url)}`\n"
         f"\U0001f4e1 Status   : `{status_display}`\n"
-        f"\u26a1 AMP Awal : `{amp_display}`\n"
+        f"\u26a1 AMP URL  : `{amp_display}`\n"
         f"\U0001f464 Pemilik  : {mention}\n"
-        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
+        f"\U0001f552 Waktu    : `{datetime.now().strftime('%d/%m/%Y %H:%M')}`\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
         f"{conn_warning}",
         disable_web_page_preview=True,
     )
@@ -649,11 +650,16 @@ async def hapus(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_data(data)
         await safe_reply(
             update.message,
-            f"\U0001f5d1 *Domain Dihapus*\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\U0001f310 `{get_display_url(request_url)}`",
+            f"\U0001f5d1 *DOMAIN DIHAPUS*\n"
+            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            f"\U0001f310 Domain : `{get_display_url(request_url)}`\n"
+            f"\U0001f552 Waktu  : `{datetime.now().strftime('%d/%m/%Y %H:%M')}`\n"
+            f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            f"\U0001f4ac _Domain tidak lagi dipantau._",
             disable_web_page_preview=True,
         )
     else:
-        await update.message.reply_text("\u26a0\ufe0f Domain tidak ditemukan.")
+        await update.message.reply_text("\u26a0\ufe0f Domain tidak ditemukan dalam daftar monitoring.")
 
 
 # =====================
@@ -665,16 +671,22 @@ async def list_domains(update: Update, context: ContextTypes.DEFAULT_TYPE):
     domains = [d for d, info in data.items() if info.get("chat_id") == chat_id]
 
     if not domains:
-        await update.message.reply_text("Belum ada domain tersimpan.")
+        await update.message.reply_text("\U0001f4ed Belum ada domain dalam monitoring.")
         return
 
-    msg = ["\U0001f4cb *DAFTAR DOMAIN MONITORING*\n"]
-    for d in domains:
+    msg = [f"\U0001f4cb *DAFTAR DOMAIN MONITORING*\n\U0001f4ca Total: `{len(domains)}` domain\n"]
+    for idx, d in enumerate(domains, 1):
         info       = data[d]
         amp_now    = info.get("current_amp")
+        amp_init   = info.get("initial_amp")
         amp_display = (
             get_display_url(amp_now)
             if amp_now and amp_now not in ("CONN_ERROR", "HTTP_ERROR")
+            else "Tidak terdeteksi"
+        )
+        amp_init_display = (
+            get_display_url(amp_init)
+            if amp_init and amp_init not in ("CONN_ERROR", "HTTP_ERROR")
             else "Tidak terdeteksi"
         )
         http_status = info.get("last_http_status", "-")
@@ -684,15 +696,23 @@ async def list_domains(update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_fn  = info.get("owner_first_name", "Pemilik")
         mention   = make_mention(owner_uid, owner_un, owner_fn) if owner_uid else "-"
 
+        # Status indicator
+        if amp_now and amp_now not in ("CONN_ERROR", "HTTP_ERROR"):
+            status_icon = "\u2705"
+        else:
+            status_icon = "\u26a0\ufe0f"
+
         msg.append(
-            "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
-            f"\U0001f310 `{get_display_url(d)}`\n"
-            f"\u26a1 AMP Awal     : `{get_display_url(info.get('initial_amp'))}`\n"
+            "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+            f"{status_icon} *#{idx}* `{get_display_url(d)}`\n"
+            f"\u26a1 AMP Awal     : `{amp_init_display}`\n"
             f"\u26a1 AMP Sekarang : `{amp_display}`\n"
-            f"\U0001f4e1 Status       : `{http_status}`\n"
+            f"\U0001f4e1 HTTP Status  : `{http_status}`\n"
             f"\U0001f464 Pemilik      : {mention}\n"
-            f"\U0001f552 Last Check   : {info.get('last_checked', '-')}"
+            f"\U0001f552 Last Check   : `{info.get('last_checked', '-')}`"
         )
+
+    msg.append("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
 
     await safe_reply(
         update.message,
@@ -729,13 +749,13 @@ async def cek(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_delete(context, chat_id, loading_msg.message_id)
 
     if amp == "CONN_ERROR":
-        amp_text = "\u26a0\ufe0f Tidak bisa konek"
+        amp_text = "\u26a0\ufe0f `Tidak bisa konek`"
     elif amp == "HTTP_ERROR":
-        amp_text = "\u274c HTTP Error (4xx)"
+        amp_text = "\u274c `HTTP Error (4xx)`"
     elif amp is None:
-        amp_text = "\u2796 Tidak ditemukan"
+        amp_text = "\u2796 `Tidak ditemukan`"
     else:
-        amp_text = f"`{get_display_url(amp)}`"
+        amp_text = f"\u2705 `{get_display_url(amp)}`"
 
     status_display = format_status_display(status)
     redirect_line  = ""
@@ -743,15 +763,21 @@ async def cek(update: Update, context: ContextTypes.DEFAULT_TYPE):
         redir_display = get_display_url(status['redirect_url'])
         redirect_line = f"\U0001f500 Redirect   : `{redir_display}`\n"
 
+    page_title_line = ""
+    if status.get("page_title"):
+        page_title_line = f"\U0001f4c4 Page Title : `{status['page_title']}`\n"
+
     await safe_reply(
         update.message,
         f"\U0001f50d *HASIL PENGECEKAN AMP*\n"
-        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
         f"\U0001f310 Domain     : `{get_display_url(request_url)}`\n"
-        f"\U0001f4e1 Status     : `{status_display}`\n"
+        f"\U0001f4e1 HTTP Code  : `{status_display}`\n"
         f"{redirect_line}"
+        f"{page_title_line}"
         f"\u26a1 AMP URL    : {amp_text}\n"
-        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        f"\U0001f552 Waktu      : `{datetime.now().strftime('%d/%m/%Y %H:%M')}`\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
         disable_web_page_preview=True,
     )
 
@@ -781,23 +807,29 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_delete(context, chat_id, loading_msg.message_id)
 
     if status["ok"]:
-        kondisi = "\u2705 Online"
+        kondisi = "\u2705 `Online`"
     elif status["error"]:
-        kondisi = f"\u274c {status['error']}"
+        kondisi = f"\u274c `{status['error']}`"
     else:
-        kondisi = "\u26a0\ufe0f Bermasalah"
+        kondisi = "\u26a0\ufe0f `Bermasalah`"
 
     redirect_line = f"\U0001f500 Redirect   : `{get_display_url(status['redirect_url'])}`\n" if status.get("redirect_url") else ""
+
+    page_title_line = ""
+    if status.get("page_title"):
+        page_title_line = f"\U0001f4c4 Page Title : `{status['page_title']}`\n"
 
     await safe_reply(
         update.message,
         f"\U0001f4e1 *STATUS DOMAIN*\n"
-        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
         f"\U0001f310 Domain     : `{get_display_url(request_url)}`\n"
         f"\U0001f4c8 HTTP Code  : `{status['status_code'] or '-'}`\n"
         f"{redirect_line}"
+        f"{page_title_line}"
         f"\U0001f7e2 Kondisi    : {kondisi}\n"
-        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        f"\U0001f552 Waktu      : `{datetime.now().strftime('%d/%m/%Y %H:%M')}`\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
         disable_web_page_preview=True,
     )
 
@@ -863,12 +895,13 @@ async def update_amp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_reply(
         update.message,
         f"\u2705 *AMP REFERENSI DIPERBARUI*\n"
-        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
         f"\U0001f310 Domain   : `{get_display_url(request_url)}`\n"
         f"\u26a1 AMP Lama : `{get_display_url(old_amp)}`\n"
         f"\u26a1 AMP Baru : `{get_display_url(new_amp) if new_amp else 'Tidak ada AMP'}`\n"
         f"\U0001f464 Oleh     : {mention}\n"
-        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        f"\U0001f552 Waktu    : `{datetime.now().strftime('%d/%m/%Y %H:%M')}`\n"
+        f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
         disable_web_page_preview=True,
     )
 
@@ -893,7 +926,7 @@ async def periodic_check(app):
             owner_un   = info.get("owner_username")
             owner_fn   = info.get("owner_first_name", "Pemilik")
             mention    = make_mention(owner_uid, owner_un, owner_fn) if owner_uid else ""
-            mention_line = f"Pemilik : {mention}\n" if mention else ""
+            mention_line = f"\U0001f464 Pemilik : {mention}\n" if mention else ""
 
             # -- Cek status domain --
             domain_status = await check_domain_status(domain)
@@ -908,12 +941,13 @@ async def periodic_check(app):
                         await app.bot.send_message(
                             chat_id=info["chat_id"],
                             text=(
-                                "*DOMAIN TIDAK BISA DIAKSES*\n"
-                                "--------------------\n"
-                                f"Domain  : {get_display_url(domain)}\n"
-                                f"Status  : {err_msg}\n"
+                                "\u274c *DOMAIN TIDAK BISA DIAKSES*\n"
+                                "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+                                f"\U0001f310 Domain  : `{get_display_url(domain)}`\n"
+                                f"\u26a0\ufe0f Status  : `{err_msg}`\n"
+                                f"\U0001f552 Waktu   : `{datetime.now().strftime('%d/%m/%Y %H:%M')}`\n"
                                 f"{mention_line}"
-                                "--------------------"
+                                "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
                             ),
                             disable_web_page_preview=True,
                             parse_mode="Markdown"
@@ -945,20 +979,23 @@ async def periodic_check(app):
                 consecutive_no_amp += 1
                 data[domain]["consecutive_no_amp"] = consecutive_no_amp
 
-                if consecutive_no_amp >= 3 and current_amp != new_amp and notified_count < 3:
-                    data[domain]["current_amp"] = new_amp
+                # Kirim notif setiap kelipatan 3x berturut-turut AMP hilang
+                # dan belum melebihi batas 3 notif
+                if consecutive_no_amp >= 3 and consecutive_no_amp % 3 == 0 and notified_count < 3:
+                    data[domain]["current_amp"] = None
                     try:
                         await app.bot.send_message(
                             chat_id=info["chat_id"],
                             text=(
-                                "*AMP TIDAK TERDETEKSI*\n"
-                                "--------------------\n"
-                                f"Domain   : {get_display_url(domain)}\n"
-                                f"AMP Awal : {get_display_url(initial_amp)}\n"
-                                f"Status   : Hilang 3x berturut-turut\n"
-                                f"Notif    : {notified_count+1}/3\n"
+                                "⚠️ *AMP TIDAK TERDETEKSI*\n"
+                                "────────────────────\n"
+                                f"🌐 Domain   : `{get_display_url(domain)}`\n"
+                                f"⚡ AMP Awal : `{get_display_url(initial_amp)}`\n"
+                                f"📊 Status   : Hilang {consecutive_no_amp}x berturut-turut\n"
+                                f"🔔 Notif    : {notified_count+1}/3\n"
                                 f"{mention_line}"
-                                "--------------------"
+                                "────────────────────\n"
+                                f"Gunakan /cek {get_display_url(domain)} untuk cek manual"
                             ),
                             disable_web_page_preview=True,
                             parse_mode="Markdown"
@@ -977,15 +1014,16 @@ async def periodic_check(app):
                             await app.bot.send_message(
                                 chat_id=info["chat_id"],
                                 text=(
-                                    "*AMP URL BERUBAH*\n"
-                                    "--------------------\n"
-                                    f"Domain   : {get_display_url(domain)}\n"
-                                    f"AMP Lama : {get_display_url(initial_amp)}\n"
-                                    f"AMP Baru : {get_display_url(new_amp)}\n"
-                                    f"Notif    : {notified_count+1}/3\n"
+                                    "\U0001f504 *AMP URL BERUBAH*\n"
+                                    "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+                                    f"\U0001f310 Domain   : `{get_display_url(domain)}`\n"
+                                    f"\u26a1 AMP Lama : `{get_display_url(initial_amp)}`\n"
+                                    f"\u26a1 AMP Baru : `{get_display_url(new_amp)}`\n"
+                                    f"\U0001f514 Notif    : `{notified_count+1}/3`\n"
+                                    f"\U0001f552 Waktu    : `{datetime.now().strftime('%d/%m/%Y %H:%M')}`\n"
                                     f"{mention_line}"
-                                    f"Jika disengaja gunakan: /update {get_display_url(domain)}\n"
-                                    "--------------------"
+                                    "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+                                    f"\U0001f4ac _Jika disengaja gunakan:_ /update `{get_display_url(domain)}`"
                                 ),
                                 disable_web_page_preview=True,
                                 parse_mode="Markdown"
@@ -1002,12 +1040,13 @@ async def periodic_check(app):
                         await app.bot.send_message(
                             chat_id=info["chat_id"],
                             text=(
-                                "*AMP KEMBALI NORMAL*\n"
-                                "--------------------\n"
-                                f"Domain    : {get_display_url(domain)}\n"
-                                f"AMP Aktif : {get_display_url(initial_amp)}\n"
+                                "\u2705 *AMP KEMBALI NORMAL*\n"
+                                "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+                                f"\U0001f310 Domain    : `{get_display_url(domain)}`\n"
+                                f"\u26a1 AMP Aktif : `{get_display_url(initial_amp)}`\n"
+                                f"\U0001f552 Waktu     : `{datetime.now().strftime('%d/%m/%Y %H:%M')}`\n"
                                 f"{mention_line}"
-                                "--------------------"
+                                "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
                             ),
                             disable_web_page_preview=True,
                             parse_mode="Markdown"
