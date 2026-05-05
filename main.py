@@ -290,7 +290,11 @@ async def check_domain_status(url):
                     except:
                         pass
 
+                    # Retry pada 403 dan 5xx dengan UA berbeda
                     if resp.status == 403 and ua_idx != browser_ua_indices[-1]:
+                        continue
+                    if resp.status >= 500 and ua_idx != browser_ua_indices[-1]:
+                        await asyncio.sleep(2)
                         continue
 
                     return result
@@ -935,8 +939,13 @@ async def periodic_check(app):
                 data[domain]["last_page_status"] = domain_status["page_status_text"]
 
             if not domain_status["ok"]:
+                # Hitung berapa kali berturut-turut domain gagal
+                consecutive_down = info.get("consecutive_down", 0) + 1
+                data[domain]["consecutive_down"] = consecutive_down
                 err_msg = domain_status["error"] or format_status_display(domain_status)
-                if not info.get("domain_down_notified", False):
+
+                # Kirim notif hanya jika gagal 2x berturut-turut (bukan 1x saja)
+                if consecutive_down >= 2 and not info.get("domain_down_notified", False):
                     try:
                         await app.bot.send_message(
                             chat_id=info["chat_id"],
@@ -945,9 +954,11 @@ async def periodic_check(app):
                                 "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
                                 f"\U0001f310 Domain  : `{get_display_url(domain)}`\n"
                                 f"\u26a0\ufe0f Status  : `{err_msg}`\n"
+                                f"\U0001f4ca Gagal   : `{consecutive_down}x berturut-turut`\n"
                                 f"\U0001f552 Waktu   : `{datetime.now().strftime('%d/%m/%Y %H:%M')}`\n"
                                 f"{mention_line}"
-                                "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
+                                "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+                                f"\U0001f4ac _Gunakan_ /status `{get_display_url(domain)}` _untuk cek manual_"
                             ),
                             disable_web_page_preview=True,
                             parse_mode="Markdown"
@@ -956,12 +967,36 @@ async def periodic_check(app):
                         updated = True
                     except:
                         pass
+                elif consecutive_down < 2:
+                    write_log(f"[DOWN {consecutive_down}/2] {domain} -> {err_msg} (menunggu konfirmasi)")
+
                 data[domain]["last_checked"] = str(datetime.now())
                 updated = True
                 continue
 
+            # Domain OK -> reset counter down
+            if info.get("consecutive_down", 0) > 0:
+                data[domain]["consecutive_down"] = 0
+                updated = True
             if info.get("domain_down_notified", False):
                 data[domain]["domain_down_notified"] = False
+                try:
+                    await app.bot.send_message(
+                        chat_id=info["chat_id"],
+                        text=(
+                            "\u2705 *DOMAIN KEMBALI ONLINE*\n"
+                            "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+                            f"\U0001f310 Domain  : `{get_display_url(domain)}`\n"
+                            f"\U0001f4e1 Status  : `{domain_status['status_code']}`\n"
+                            f"\U0001f552 Waktu   : `{datetime.now().strftime('%d/%m/%Y %H:%M')}`\n"
+                            f"{mention_line}"
+                            "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
+                        ),
+                        disable_web_page_preview=True,
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
                 updated = True
 
             # -- Cek AMP --
