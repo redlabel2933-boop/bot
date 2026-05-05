@@ -33,6 +33,10 @@ def health_check():
 def run_bot():
     """Jalankan bot langsung (bukan subprocess)."""
     try:
+        import asyncio
+        # Buat event loop baru untuk thread ini
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         print("[SERVER] Starting AMP Monitor Bot...", flush=True)
         bot_status["running"] = True
         from amp import main
